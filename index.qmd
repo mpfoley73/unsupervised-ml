@@ -1,0 +1,5 @@
+# Preface {-}
+
+These notes are a personal reference related to unsupervised machine learning (ML).
+
+Repo for this quarto book: [https://github.com/mpfoley73/unsupervised-ml](https://github.com/mpfoley73/unsupervised-ml).

@@ -1,0 +1,346 @@
+# PCA {#sec-pca}
+
+Machine learning datasets often have an enormous number of columns. Many are correlated because they measure the same latent construct. You could try to drop redundant columns, but sometimes the redundancy is not obvious, hidden in combinations of columns. Principle components analysis (PCA) reduces the number of columns to a few, interpretable linear combinations while retaining as much information as possible.^[Material from [PSU](https://online.stat.psu.edu/stat505/lesson/11), [Laerd](https://statistics.laerd.com/premium/spss/pca/pca-in-spss.php), and @shlens2014tutorial.]
+
+The FactoMineR and factoextra packages are the main workhorses in PCA.
+
+```{r}
+#| message: false
+#| warning: false
+
+library(tidyverse)
+library(gtsummary)
+
+library(corrr)
+library(ggcorrplot)
+library(FactoMineR)  # Perform PCA
+library(factoextra)  # Visualize PCA results
+```
+
+## Intuition and Matrix Algebra
+
+@shlens2014tutorial presents an intuitive motivating example. Suppose you are studying the motion of a spring. It oscillates at a set frequency along the x-axis, but you don't understand that yet. You collect movement data from cameras set up along three axes $\{ \vec{a}, \vec{b}, \vec{c} \}$. That's more dimensional data than you need! PCA reveals the hidden structure in your noisy data: $\vec{x}$ is the important dimension.
+
+Your dataset consists of 72,000 rows photos: 120 photos taken per second for 10 minutes The columns are the x- and y- coordinates measured from each camera. Each row of data may be expressed as a column vector, $\vec{X}$.
+
+$$
+\vec{X} = \begin{bmatrix} x_A \\ y_A \\ x_B \\ y_B \\ x_C \\ y_C \end{bmatrix}
+$$
+
+$\vec{X}$ is an *m = 6*-dimensional vector. Equivalently, $\vec{X}$ lies in an *m*-dimensional vector space spanned by some orthonormal basis. The orthonormal basis for each camera is $\{(1,0), (0,1)\}$ _from its own perspective_, so a data point from camera $A$ might equivalently be expressed as 
+
+$$
+\begin{bmatrix} 1 & 0 \\ 0 & 1 \end{bmatrix} \begin{bmatrix} x_A \\ y_A \end{bmatrix}
+$$
+
+::: {.callout-tip collapse="true"}
+## Note on Orthonormal Bases
+
+An orthonormal basis is any set of vectors whose pairwise inner products are zero. The orthonormal basis for camera $A$ might be $\{(\sqrt{2}/2,\sqrt{2}/2), (-\sqrt{2}/2,\sqrt{2}/2)\}$ from a neutral perspective. From the neutral perspective, you would have to rotate the axes 45 degrees.
+
+```{r}
+#| fig-height: 3
+#| fig-width: 5
+
+# M is a 45-degree line
+M <- matrix(c(0:100, 0:100 * tan(45*(pi/180))), ncol = 2)
+colnames(M) <- c("X", "Y")
+
+# M is unchanged after multiplication by identity matrix.
+I <- matrix(c(1, 0, 0, 1), nrow = 2)
+M1 <- M %*% I
+colnames(M1) <- colnames(M)
+
+# Rotate M 45-degrees.
+B <- matrix(c(sqrt(2)/2, sqrt(2)/2, -sqrt(2)/2, sqrt(2)/2), nrow = 2)
+M2 <- M %*% B
+colnames(M2) <- colnames(M)
+
+bind_rows(
+  `45 degree line` = as_tibble(M1),
+  `Rotated 45 degrees` = as_tibble(M2),
+  .id = "series"
+) |>
+  ggplot(aes(x = X, y = Y, color = series)) +
+  geom_line() +
+  labs(x = NULL, y = NULL, color = NULL)
+```
+
+:::
+
+Extending this idea to the entire sample of three cameras, you might start by naively assuming the three cameras collect data from the _same perspective_, taking each measurement at face value. The set of orthonormal basis vectors, $\textbf{B}$ would look like this identity matrix
+
+$$
+\textbf{B} = \begin{bmatrix} b_1 \\ b_2 \\ \vdots \\ b_m \end{bmatrix} = \begin{bmatrix} 1 & 0 & \cdots & 0 \\ 0 & 1 & \cdots & 0 \\ \vdots & \vdots & \ddots & \vdots \\ 0 & 0 & \cdots & 1 \end{bmatrix}
+$$
+
+where $b_1$ and $b_2$ are the bases used by camera $A$, etc. Now the data set $\textbf{X}$ can be expressed as the matrix multiplication, $\textbf{BX}$. This added complexity allows you to ask whether another basis, $\textbf{P}$, _that is a linear combination of the original basis_, better expresses the data set, $\textbf{PX} = \textbf{Y}$. The _linear_ restriction is a key simplifying assumption of PCA. $\textbf{P}$ transforms $\textbf{X}$ into $\textbf{Y}$, but you can also think of it as rotating and stretching $\textbf{X}$ into $\textbf{Y}.$
+
+The goal of PCA is to maximize variance (the signal-to-noise ratio) and minimize covariance (redundancy). The signal-to-noise ratio is $SNR = \sigma^2_{signal} / \sigma^2_{noise}$. In each camera's 2D perspective, the signal is the amplitude of the movement of the spring along the x-axis and the noise is the movement along the y-axis. Looking at the raw (un-rotated) data from camera $A$, you might guess the spring dynamics occur in the direction yielding the highest SNR, the 45-degree rotation. 
+
+```{r}
+#| echo: false
+#| code-fold: true
+#| fig-width: 3.5
+#| fig-height: 3.5
+
+# In one camera's 2D space perspective, the spring along the x-axis with amplitude
+# [0, 100]. There is noise in signal which you can represent as perturbations in
+# the y-axis (normally distributed)
+x <- c(0:100)
+y <- rnorm(101, 0, 5)
+my_dat <- data.frame(x, y)
+
+# rotate y 45 degrees
+B <- matrix(c(sqrt(2)/2, -sqrt(2)/2, sqrt(2)/2, sqrt(2)/2), nrow = 2)
+my_dat <- matrix(c(x, y), ncol = 2) %*% B %>% data.frame()
+signal <- matrix(c(50, 100, 0, 0), ncol = 2) %*% B %>% data.frame() %>% 
+  mutate(ID = row_number()) %>%
+  pivot_wider(names_from = ID, values_from = X1:X2)
+noise <- matrix(c(50, 50, 0, 10), ncol = 2) %*% B %>% data.frame() %>% 
+  mutate(ID = row_number()) %>%
+  pivot_wider(names_from = ID, values_from = X1:X2)
+
+ggplot() +
+  geom_point(dat = my_dat, aes(x = X1, y = X2)) +
+  geom_segment(data = signal, aes(x = X1_1, xend = X1_2, y = X2_1, yend = X2_2),
+               color = "goldenrod", linewidth = 1) +
+  geom_segment(data = noise, aes(x = X1_1, xend = X1_2, y = X2_1, yend = X2_2),
+               color = "goldenrod", linewidth = 1) +
+  labs(x = NULL, y = NULL)
+```
+
+The other criteria is redundancy. There are three cameras recording the same activity, so they are perfectly correlated. If $\textbf{X}$ is an $m \times n$ matrix of centered values (subtracting the mean), PCA will find an orthonormal matrix $\textbf{P}$ in $\textbf{Y} = \textbf{PX}$ such that the covariance matrix $\textbf{C}_\textbf{Y} = \frac{1}{n}\textbf{YY}^T$ is a diagonal matrix. The rows of $\textbf{P}$ are the principal components of $\textbf{X}$.
+
+The process is to select a normalized direction in *m*-dimensional space which maximizes the $\textbf{X}$ variance. Save this vector as $\textbf{p}_1$. Next find a second direction along which variance is maximized, but restrict the search to directions that are orthogonal to the previous direction. Save this vector as $\textbf{p}_2$. Repeat until all *m* vectors are selected. The resulting ordered set of $\textbf{p}$'s are the principal components.
+
+With matrix algebra, you can express $\textbf{C}_\textbf{Y}$ in terms of the covariance matrix of $\textbf{X}$, $\textbf{C}_\textbf{X}$.
+
+$$
+\begin{align}
+\textbf{C}_\textbf{Y} &= \frac{1}{n}\textbf{YY}^T \\
+&= \frac{1}{n}(\textbf{PX})(\textbf{PX})^T \\
+&= \frac{1}{n}\textbf{PXX}^T\textbf{P}^T \\
+&= P\left(\frac{1}{n}\textbf{XX}^T\right)\textbf{P}^T \\
+&= \textbf{PC}_\textbf{X}\textbf{P}^T
+\end{align}
+$$
+
+Any symmetric matrix can be diagonalized by an orthogonal matrix of its eigenvectors, $\textbf{C}_\textbf{X} = \textbf{E}^T\textbf{DE}$. So select $\textbf{P}$ to be such a matrix.
+
+$$
+\begin{align}
+\textbf{C}_\textbf{Y} &= \textbf{PC}_\textbf{X}\textbf{P}^T \\
+&= \textbf{P}(\textbf{E}^T\textbf{DE})\textbf{P}^T \\
+&= \textbf{P}(\textbf{P}^T\textbf{DP})\textbf{P}^T \\
+&= (\textbf{PP}^T)\textbf{D}(\textbf{PP}^T) \\
+&= (\textbf{PP}^{-1})\textbf{D}(\textbf{PP}^{-1}) \\
+&= \textbf{D}
+\end{align}
+$$
+
+## Case Study
+
+Let's work with a case study presented by [Laerd](https://statistics.laerd.com/premium/spss/pca/pca-in-spss.php). 
+
+```{r}
+#| include: false
+
+likert_scale <- c(
+  "Strongly Agree", "Agree", "Agree Somewhat", "Undecided", "Disagree Somewhat",
+  "Disagree", "Strongly Disagree"
+)
+```
+
+```{r}
+pca_dat <- 
+  foreign::read.spss("./input/pca.sav", to.data.frame = TRUE) |>
+  mutate(
+    across(where(is.factor), ~factor(., levels = likert_scale, ordered = TRUE))
+  )
+
+glimpse(pca_dat)
+```
+
+```{r}
+#| include: false
+
+n <- nrow(pca_dat)
+
+q_colnames <- pca_dat %>% select(Qu1:Qu25) %>% colnames()
+```
+
+`r n` job candidates complete a questionnaire consisting of 25 questions using a 7-level Likert scale. Questions focused on motivation, dependability, enthusiasm, and commitment.
+
+```{r}
+#| include: false
+
+gt_items <- function(items) {
+  pca_dat |>
+    select(all_of(items)) |>
+    pivot_longer(everything()) |>
+    mutate(name = fct_drop(factor(name, levels = q_colnames))) |>
+    tbl_summary(by = "value", percent = "row", label = list(name ~ "")) |>
+    as_gt()
+}
+```
+
+::: panel-tabset
+
+### Motivaton
+
+```{r}
+gt_items(c("Qu3", "Qu4", "Qu5", "Qu6", "Qu7", "Qu8", "Qu12", "Qu13"))
+```
+
+### Dependability
+
+```{r}
+gt_items(c("Qu2", "Qu14", "Qu15", "Qu16", "Qu17", "Qu18", "Qu19"))
+```
+
+### Enthusiasm
+
+```{r}
+gt_items(c("Qu20", "Qu21", "Qu22", "Qu23", "Qu24", "Qu25"))
+```
+
+### Commitment
+
+```{r}
+gt_items(c("Qu1", "Qu9", "Qu10", "Qu11"))
+```
+
+:::
+
+## Assumptions
+
+Missing values can bias PCA results. If you have missing values, you should either impute, remove the observations, or drop the columns. Fortunately there are no missing values in this dataset.
+
+```{r}
+colSums(is.na(pca_dat))
+```
+
+Let's drop the unrelated `FAC*` cols. PCA only works with numerical values. Our questionnaire uses a 7-level scale, so we're probably okay to treat that as numeric. The data should also be normalized (subtract mean, divide by SD). Note that the `scale()` function returns the data as a matrix (fine).
+
+```{r}
+pca_numeric <-
+  pca_dat |>
+  select(starts_with("Qu")) |> 
+  mutate(across(everything(), as.numeric)) |>
+  scale()
+
+str(pca_numeric)
+```
+
+PCA is based on correlation coefficients, so all variables should be linearly related (*r* > .3) to at least one other variable. You might test this with a correlation matrix scatterplot, but the number of relationships can get unwieldy. 
+
+```{r}
+corr_mtrx <- cor(pca_numeric, method = "pearson")
+
+ggcorrplot::ggcorrplot(corr_mtrx)
+```
+
+Instead, just query the matrix for the max correlations. The worst is q20.
+
+```{r}
+#| code-fold: true
+
+as_tibble(corr_mtrx) |>
+  mutate(var1 = factor(q_colnames, levels = q_colnames)) |>
+  pivot_longer(cols = c(Qu1:Qu25), names_to = "var2", values_to = "rho") |>
+  filter(var1 != var2) |>
+  slice_max(by = var1, order_by = rho, n = 1) |>
+  gt::gt() |> 
+  gt::data_color(
+    columns = rho, 
+    method = "numeric",
+    palette = c("white", "dodgerblue3"),
+    domain = c(0.2, .9)
+  )
+```
+
+- The sample sizes should be large. As a rule of thumb, there should be at least 5 cases per variable.
+- There should be no outliers. Component scores greater than 3 standard deviations away from the mean can have a disproportionate influence on the results.
+
+#### Sampling Adequacy {-}
+
+Each variable and the complete model should have an "adequate sample". The Kaiser-Meyer-Olkin (KMO) measure of sampling adequacy compares the variable's correlations with other variables to the partial correlations in the data. The test measures sampling adequacy for each variable in the model and for the complete model.^[See [Statistics How-to](https://www.statisticshowto.com/kaiser-meyer-olkin/).] 
+
+$$
+\text{KMO}_j = \frac{\sum_{i \ne j}r_{ij}^2}{\sum_{i \ne j}r_{ij}^2 + \sum_{i \ne j} u}
+$$
+
+where $r_{ij}$ are correlations, and $u_{ij}$ are partial covariances.
+
+```{r}
+EFAtools::KMO(corr_mtrx)
+```
+
+Scores range from 0 to 1. Values should be at least .6 to justify a PCA. Values over .8 are preferable.
+
+Bartlett's test of sphericity tests the null hypothesis that the correlation matrix is an identity matrix, i.e., there are no correlations between any variables.
+
+```{r}
+EFAtools::BARTLETT(corr_mtrx, N = nrow(pca_dat))
+```
+
+## Perform PCA
+
+`princomp()` from the stats package performs a PCA analysis. 
+
+```{r}
+princomp(pca_numeric,
+  cor = TRUE
+) %>% summary()
+
+pca_result <- prcomp(pca_numeric, center = TRUE, scale = TRUE) 
+
+pca_result$rotation
+
+biplot(pca_result, scale = 0)
+
+pca_result$sdev^2 / sum(pca_result$sdev^2)
+```
+
+
+The communality is the proportion of each variable's variance that is accounted for by the principal components analysis and can also be expressed as a percentage. 
+
+A principal components analysis will produce as many components as there are variables. However, the purpose of principal components analysis is to explain as much of the variance in your variables as possible using as few components as possible. After you have extracted your components, there are four major criteria that can help you decide on the number of components to retain: (a) the eigenvalue-one criterion, (b) the proportion of total variance accounted for, (c) the scree plot test, and (d) the interpretability criterion. All except for the first criterion will require some degree of subjective analysis. 
+
+
+## Appendix: Eigenvectors
+
+A square matrix, $\textbf{A}$, can be decomposed into eigenvalues, $\lambda$, and eigenvectors, $\textbf{v}$.^[Took these notes from [Math is Fun](https://www.mathsisfun.com/algebra/eigenvalue.html).]
+
+$$
+\textbf{A} \textbf{v} = \lambda \textbf{v}
+$$ {#eq-eigen1}
+
+For example, $6$ and $\begin{bmatrix}1 \\ 4 \end{bmatrix}$ are an eigenvalue and eigenvector here:
+
+$$
+\begin{bmatrix} -6 & 3 \\ 4 & 5 \end{bmatrix} \begin{bmatrix}1 \\ 4 \end{bmatrix} = 6 \begin{bmatrix}1 \\ 4 \end{bmatrix}
+$$
+
+@eq-eigen1 can be re-expressed as $\textbf{A} \textbf{v} - \lambda \textbf{I} \textbf{v} = 0.$ For $\textbf{v}$ to be non-zero, the determinant must be zero, 
+
+$$
+| \textbf{A} - \lambda \textbf{I}| = 0
+$$ {#eq-eigen2}
+
+Back to the example, use @eq-eigen2 to find possible eigenvalues.
+
+$$
+\left| \begin{bmatrix} -6 & 3 \\ 4 & 5 \end{bmatrix} - \lambda \begin{bmatrix} 1 & 0 \\ 0 & 1 \end{bmatrix} \right| = 0
+$$
+
+Subtract the matrices and calculate the determinant, $(-6 - \lambda)(5 - \lambda) - 3 \times 4 = 0,$ then solve for $\lambda = -7 \text{ or } 6.$ Now that you have the possible eigenvalues, plug them back into Equation \@ref(eq:eigen1). For $\lambda = 6$ you have
+
+$$
+\begin{bmatrix} -6 & 3 \\ 4 & 5 \end{bmatrix} \begin{bmatrix}x \\ y \end{bmatrix} = 6 \begin{bmatrix}x \\ y \end{bmatrix}
+$$
+
+Solving the system of equations reveals that $y = 4x$. So $\begin{bmatrix}1 \\ 4 \end{bmatrix}$ is a solution. You can do the same exercise for $\lambda = -7$.
+
+Eigenvectors and eigenvalues are useful because matrices are used to make transformations in space. In transformations, the eigenvector is the axis of rotation, the direction that does not change, and the eigenvalue is the scale of the stretch (1 = no change, 2 = double length, -1 = point backwards, etc.).
