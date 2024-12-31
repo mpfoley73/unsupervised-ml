@@ -1,25 +1,104 @@
 # PCA {#sec-pca}
 
-Machine learning datasets often have an enormous number of columns. Many are correlated because they measure the same latent construct. You could try to drop redundant columns, but sometimes the redundancy is not obvious, hidden in combinations of columns. Principle components analysis (PCA) reduces the number of columns to a few, interpretable linear combinations while retaining as much information as possible.^[Material from [PSU](https://online.stat.psu.edu/stat505/lesson/11), [Laerd](https://statistics.laerd.com/premium/spss/pca/pca-in-spss.php), and @shlens2014tutorial.]
+Machine learning datasets often have an enormous number of columns, many of which are correlated because they essentially measure the same latent construct. You could drop redundant columns, but sometimes the redundancy is not obvious, hidden in combinations of columns. Principle components analysis (PCA) reduces the number of columns to a few, interpretable linear combinations while retaining as much information as possible.^[Material from [PSU](https://online.stat.psu.edu/stat505/lesson/11), [Laerd](https://statistics.laerd.com/premium/spss/pca/pca-in-spss.php), and @shlens2014tutorial.]
 
-The FactoMineR and factoextra packages are the main workhorses in PCA.
+No special packages for this section, just load the tidyverse.
 
 ```{r}
 #| message: false
 #| warning: false
 
 library(tidyverse)
-library(gtsummary)
-
-library(corrr)
-library(ggcorrplot)
-library(FactoMineR)  # Perform PCA
-library(factoextra)  # Visualize PCA results
 ```
 
 ## Intuition and Matrix Algebra
 
-@shlens2014tutorial presents an intuitive motivating example. Suppose you are studying the motion of a spring. It oscillates at a set frequency along the x-axis, but you don't understand that yet. You collect movement data from cameras set up along three axes $\{ \vec{a}, \vec{b}, \vec{c} \}$. That's more dimensional data than you need! PCA reveals the hidden structure in your noisy data: $\vec{x}$ is the important dimension.
+@shlens2014tutorial introduces PCA with an intuitive toy example where the movement of an oscillating spring is monitored by cameras from three positions in a room. Each camera produces a dataset of x and y coordinates, six vectors of numbers altogether, but the physical reality is there is only one dimension of movement. PCA should be able to reduce the six vectors into a single principle component.
+
+I'll simplify this even more. The three cameras are all located at x = 0, y = 0, but are rotated 15 degrees, 45 degrees, and 150 degrees respectively. From the cameras' perspectives, the oscillation occurs in different directions.
+
+```{r}
+#| code-fold: true
+
+# 100 photos of the end of the spring taken over 10s of motion.
+t <- seq(0, 10, length.out = 100)
+
+# simple harmonic motion from our perspective: 0-degree rotation.
+x_0 <- sin(2 * pi * 0.5 * t)
+y_0 <- rep(0, length(t))
+coords_0 <- matrix(c(x_0, y_0), ncol = 2)
+
+# 15-degree rotation matrix for camera 1
+theta_1 = pi * (1 / 12)
+M_1 <- matrix(c(cos(theta_1), -sin(theta_1), sin(theta_1), cos(theta_1)), nrow = 2)
+coords_1 <- coords_0 %*% M_1
+
+# 45-degree rotation matrix for camera 2
+theta_2 = pi * (1 / 4)
+M_2 <- matrix(c(cos(theta_2), -sin(theta_2), sin(theta_2), cos(theta_2)), nrow = 2)
+coords_2 <- coords_0 %*% M_2
+
+# 150-degree rotation matrix for camera 3
+theta_3 = pi * (5 / 6)
+M_3 <- matrix(c(cos(theta_3), -sin(theta_3), sin(theta_3), cos(theta_3)), nrow = 2)
+coords_3 <- coords_0 %*% M_3
+
+# Combined dataset
+spring <- tibble(
+  camera_1_x = coords_1[, 1],
+  camera_1_y = coords_1[, 2],
+  camera_2_x = coords_2[, 1],
+  camera_2_y = coords_2[, 2],
+  camera_3_x = coords_3[, 1],
+  camera_3_y = coords_3[, 2]
+)
+```
+
+```{r}
+#| echo: false
+
+spring |>
+  # pivot_longer(
+  #   everything(
+  #     names_to = c("")
+  #   )
+  # )
+  pivot_longer(
+    everything(), 
+    names_to = c("Camera", "Coord"),
+    names_pattern = "camera_(.)_(.)"
+  ) |>
+  mutate(
+    Camera = case_when(
+      Camera == "1" ~ "Camera 1 (15-degrees)",
+      Camera == "2" ~ "Camera 2 (45-degrees)",
+      Camera == "3" ~ "Camera 3 (150-degrees)"
+    )
+  ) |>
+  mutate(.by = c(Camera, Coord), Obs = row_number()) |>
+  pivot_wider(names_from = Coord, values_from = value) |>
+  ggplot(aes(x = x, y = y)) +
+  geom_point() +
+  facet_wrap(vars(Camera), nrow = 1) +
+  labs(title = "Simple Harmonic Motion from Three Perspectives")
+```
+
+```{r}
+pca <- prcomp(spring, center = TRUE, scale. = TRUE)
+
+# Summary of PCA
+summary(pca)
+
+# Biplot of PCA
+biplot(pca)
+
+```
+
+
+
+
+
+cameras set up along three axes $\{ \vec{a}, \vec{b}, \vec{c} \}$. That's more dimensional data than you need! PCA reveals the hidden structure in your noisy data: $\vec{x}$ is the important dimension.
 
 Your dataset consists of 72,000 rows photos: 120 photos taken per second for 10 minutes The columns are the x- and y- coordinates measured from each camera. Each row of data may be expressed as a column vector, $\vec{X}$.
 
@@ -180,8 +259,8 @@ gt_items <- function(items) {
     select(all_of(items)) |>
     pivot_longer(everything()) |>
     mutate(name = fct_drop(factor(name, levels = q_colnames))) |>
-    tbl_summary(by = "value", percent = "row", label = list(name ~ "")) |>
-    as_gt()
+    gtsummary::tbl_summary(by = "value", percent = "row", label = list(name ~ "")) |>
+    gtsummary::as_gt()
 }
 ```
 
@@ -242,6 +321,36 @@ ggcorrplot::ggcorrplot(corr_mtrx)
 ```
 
 Instead, just query the matrix for the max correlations. The worst is q20.
+
+```{r}
+# Load necessary library
+library(tidyverse)
+
+# Set seed for reproducibility
+set.seed(123)
+
+# Create a toy dataset
+n <- 100
+var1 <- rnorm(n, mean = 0, sd = 1)
+var2 <- var1 + rnorm(n, mean = 0, sd = 0.1)  # Strongly correlated with var1
+var3 <- rnorm(n, mean = 0, sd = 1)           # Weakly correlated with var1 and var2
+
+data <- data.frame(var1, var2, var3)
+
+# Standardize the dataset
+data_scaled <- scale(data)
+
+# Perform PCA
+pca <- prcomp(data_scaled, center = TRUE, scale. = TRUE)
+
+# Summary of PCA
+summary(pca)
+
+# Biplot of PCA
+biplot(pca)
+
+```
+
 
 ```{r}
 #| code-fold: true
