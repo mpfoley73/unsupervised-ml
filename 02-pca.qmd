@@ -2,20 +2,18 @@
 
 Machine learning datasets often have an enormous number of columns, many of which are correlated because they essentially measure the same latent construct. You could drop redundant columns, but sometimes the redundancy is not obvious, hidden in combinations of columns. Principle components analysis (PCA) reduces the number of columns to a few, interpretable linear combinations while retaining as much information as possible.^[Material from [PSU](https://online.stat.psu.edu/stat505/lesson/11), [Laerd](https://statistics.laerd.com/premium/spss/pca/pca-in-spss.php), and @shlens2014tutorial.]
 
-No special packages for this section, just load the tidyverse.
-
 ```{r}
-#| message: false
-#| warning: false
+#| include: false
 
 library(tidyverse)
+library(scales)
 ```
 
-## Intuition and Matrix Algebra
+## Intuition
 
-@shlens2014tutorial introduces PCA with an intuitive toy example where the movement of an oscillating spring is monitored by cameras from three positions in a room. Each camera produces a dataset of x and y coordinates, six vectors of numbers altogether, but the physical reality is there is only one dimension of movement. PCA should be able to reduce the six vectors into a single principle component.
+@shlens2014tutorial introduces PCA with a toy example where the movement of an oscillating spring is monitored by cameras from three positions in a room. Each camera produces a two-dimensional dataset of x and y coordinates, six vectors of numbers altogether. The physical reality is there is only one dimension of movement. PCA should be able to reduce the six vectors into a single principle component.
 
-I'll simplify this even more. The three cameras are all located at x = 0, y = 0, but are rotated 15 degrees, 45 degrees, and 150 degrees respectively. From the cameras' perspectives, the oscillation occurs in different directions.
+I'll simplify the example somewhat to make the math easier. I'll locate the three cameras in the same spot, x = 0 and y = 0, and rotate them 15 degrees, 45 degrees, and 150 degrees respectively.
 
 ```{r}
 #| code-fold: true
@@ -25,91 +23,98 @@ t <- seq(0, 10, length.out = 100)
 
 # simple harmonic motion from our perspective: 0-degree rotation.
 x_0 <- sin(2 * pi * 0.5 * t)
-y_0 <- rep(0, length(t))
+y_0 <- rnorm(length(t), 0, .03)
 coords_0 <- matrix(c(x_0, y_0), ncol = 2)
 
 # 15-degree rotation matrix for camera 1
-theta_1 = pi * (1 / 12)
-M_1 <- matrix(c(cos(theta_1), -sin(theta_1), sin(theta_1), cos(theta_1)), nrow = 2)
-coords_1 <- coords_0 %*% M_1
+theta_A = pi * (1 / 12)
+M_A <- matrix(c(cos(theta_A), -sin(theta_A), sin(theta_A), cos(theta_A)), nrow = 2)
+coords_A <- coords_0 %*% M_A
 
 # 45-degree rotation matrix for camera 2
-theta_2 = pi * (1 / 4)
-M_2 <- matrix(c(cos(theta_2), -sin(theta_2), sin(theta_2), cos(theta_2)), nrow = 2)
-coords_2 <- coords_0 %*% M_2
+theta_B = pi * (1 / 4)
+M_B <- matrix(c(cos(theta_B), -sin(theta_B), sin(theta_B), cos(theta_B)), nrow = 2)
+coords_B <- coords_0 %*% M_B
 
 # 150-degree rotation matrix for camera 3
-theta_3 = pi * (5 / 6)
-M_3 <- matrix(c(cos(theta_3), -sin(theta_3), sin(theta_3), cos(theta_3)), nrow = 2)
-coords_3 <- coords_0 %*% M_3
+theta_C = pi * (5 / 6)
+M_C <- matrix(c(cos(theta_C), -sin(theta_C), sin(theta_C), cos(theta_C)), nrow = 2)
+coords_C <- coords_0 %*% M_C
 
 # Combined dataset
 spring <- tibble(
-  camera_1_x = coords_1[, 1],
-  camera_1_y = coords_1[, 2],
-  camera_2_x = coords_2[, 1],
-  camera_2_y = coords_2[, 2],
-  camera_3_x = coords_3[, 1],
-  camera_3_y = coords_3[, 2]
+  t = t,
+  camera_A_x = coords_A[, 1],
+  camera_A_y = coords_A[, 2],
+  camera_B_x = coords_B[, 1],
+  camera_B_y = coords_B[, 2],
+  camera_C_x = coords_C[, 1],
+  camera_C_y = coords_C[, 2]
 )
 ```
 
 ```{r}
-#| echo: false
+glimpse(spring)
+```
 
-spring |>
-  # pivot_longer(
-  #   everything(
-  #     names_to = c("")
-  #   )
-  # )
+Here are the x-y coordinates recorded from the cameras' perspectives..
+
+```{r}
+#| echo: false
+#| fig-height: 3.25
+
+spring_longer <-
+  spring |>
   pivot_longer(
-    everything(), 
+    starts_with("camera_"), 
     names_to = c("Camera", "Coord"),
     names_pattern = "camera_(.)_(.)"
   ) |>
   mutate(
     Camera = case_when(
-      Camera == "1" ~ "Camera 1 (15-degrees)",
-      Camera == "2" ~ "Camera 2 (45-degrees)",
-      Camera == "3" ~ "Camera 3 (150-degrees)"
+      Camera == "A" ~ "Camera A (15-degrees)",
+      Camera == "B" ~ "Camera B (45-degrees)",
+      Camera == "C" ~ "Camera C (150-degrees)"
     )
   ) |>
   mutate(.by = c(Camera, Coord), Obs = row_number()) |>
-  pivot_wider(names_from = Coord, values_from = value) |>
+  pivot_wider(names_from = Coord, values_from = value)
+
+spring_longer |>
   ggplot(aes(x = x, y = y)) +
-  geom_point() +
+  geom_point(size = 1, color = my_palette$blue_red[1]) +
+  coord_cartesian(xlim = c(-1, 1), ylim = c(-1, 1)) +
   facet_wrap(vars(Camera), nrow = 1) +
   labs(title = "Simple Harmonic Motion from Three Perspectives")
 ```
 
+We can perform a PCA in a single step. The `center` and `scale.` arguments are because PCA should operate on standardized data.
+
 ```{r}
-pca <- prcomp(spring, center = TRUE, scale. = TRUE)
+spring_pca <- 
+  spring |>
+  select(-t) |>
+  prcomp(center = TRUE, scale. = TRUE)
 
-# Summary of PCA
-summary(pca)
-
-# Biplot of PCA
-biplot(pca)
-
+summary(spring_pca)
 ```
 
+PCA creates as many components as there are variables. The summary table shows the proportion of the variance in the data set explained by each component. The standard deviation of the first component is `r comma(spring_pca$sdev[1], .001)` compared to nearly zero for the other five components. It explains essentially all of the dataset variance. The upshot is that you can replace the six columns in the dataset with just this one.
 
+## Matrix Algebra
 
+PCA works by identifying the most meaningful basis to re-express the dataset. In our toy example, the unit basis along the *x*-axis is the most meaningful. It does this with matrix algebra.
 
-
-cameras set up along three axes $\{ \vec{a}, \vec{b}, \vec{c} \}$. That's more dimensional data than you need! PCA reveals the hidden structure in your noisy data: $\vec{x}$ is the important dimension.
-
-Your dataset consists of 72,000 rows photos: 120 photos taken per second for 10 minutes The columns are the x- and y- coordinates measured from each camera. Each row of data may be expressed as a column vector, $\vec{X}$.
-
-$$
-\vec{X} = \begin{bmatrix} x_A \\ y_A \\ x_B \\ y_B \\ x_C \\ y_C \end{bmatrix}
-$$
-
-$\vec{X}$ is an *m = 6*-dimensional vector. Equivalently, $\vec{X}$ lies in an *m*-dimensional vector space spanned by some orthonormal basis. The orthonormal basis for each camera is $\{(1,0), (0,1)\}$ _from its own perspective_, so a data point from camera $A$ might equivalently be expressed as 
+Each row of the dataset may be expressed as a column vector, $\vec{X}$ that is the *x* and *y* values recorded by the three cameras.
 
 $$
-\begin{bmatrix} 1 & 0 \\ 0 & 1 \end{bmatrix} \begin{bmatrix} x_A \\ y_A \end{bmatrix}
+\vec{X} = \begin{bmatrix} A_x \\ A_y \\ B_x \\ B_y \\ C_x \\ C_y \end{bmatrix}
+$$
+
+$\vec{X}$ lies in an *m=6*-dimensional vector space spanned by an orthonormal basis. The orthonormal bases for each camera are $\{(1,0), (0,1)\}$ _from their own perspective_, so a data point from camera $A$ might equivalently be expressed as 
+
+$$
+\begin{bmatrix} 1 & 0 \\ 0 & 1 \end{bmatrix} \begin{bmatrix} A_x \\ A_y \end{bmatrix}
 $$
 
 ::: {.callout-tip collapse="true"}
@@ -147,7 +152,7 @@ bind_rows(
 
 :::
 
-Extending this idea to the entire sample of three cameras, you might start by naively assuming the three cameras collect data from the _same perspective_, taking each measurement at face value. The set of orthonormal basis vectors, $\textbf{B}$ would look like this identity matrix
+Extending this to all three cameras, you might start by naively assuming they collect data from the _same perspective_, taking each measurement at face value. The set of orthonormal basis vectors, $\textbf{B}$, would look like this identity matrix
 
 $$
 \textbf{B} = \begin{bmatrix} b_1 \\ b_2 \\ \vdots \\ b_m \end{bmatrix} = \begin{bmatrix} 1 & 0 & \cdots & 0 \\ 0 & 1 & \cdots & 0 \\ \vdots & \vdots & \ddots & \vdots \\ 0 & 0 & \cdots & 1 \end{bmatrix}
@@ -155,43 +160,65 @@ $$
 
 where $b_1$ and $b_2$ are the bases used by camera $A$, etc. Now the data set $\textbf{X}$ can be expressed as the matrix multiplication, $\textbf{BX}$. This added complexity allows you to ask whether another basis, $\textbf{P}$, _that is a linear combination of the original basis_, better expresses the data set, $\textbf{PX} = \textbf{Y}$. The _linear_ restriction is a key simplifying assumption of PCA. $\textbf{P}$ transforms $\textbf{X}$ into $\textbf{Y}$, but you can also think of it as rotating and stretching $\textbf{X}$ into $\textbf{Y}.$
 
-The goal of PCA is to maximize variance (the signal-to-noise ratio) and minimize covariance (redundancy). The signal-to-noise ratio is $SNR = \sigma^2_{signal} / \sigma^2_{noise}$. In each camera's 2D perspective, the signal is the amplitude of the movement of the spring along the x-axis and the noise is the movement along the y-axis. Looking at the raw (un-rotated) data from camera $A$, you might guess the spring dynamics occur in the direction yielding the highest SNR, the 45-degree rotation. 
+So, what transformation is best? The ideal is to maximize variance (signal-to-noise ratio) and minimize covariance (redundancy) in the data. The signal-to-noise ratio is $SNR = \sigma^2_{signal} / \sigma^2_{noise}$. In each camera's 2D perspective, the signal is the amplitude of the movement of the spring along the x-axis and the noise is the movement along the y-axis. SNR is maximized by rotating the camera axes (gold below).
 
 ```{r}
 #| echo: false
-#| code-fold: true
-#| fig-width: 3.5
-#| fig-height: 3.5
+#| fig-height: 3.35
 
-# In one camera's 2D space perspective, the spring along the x-axis with amplitude
-# [0, 100]. There is noise in signal which you can represent as perturbations in
-# the y-axis (normally distributed)
-x <- c(0:100)
-y <- rnorm(101, 0, 5)
-my_dat <- data.frame(x, y)
+signal_0 <- matrix(c(0, 1, 0, 0), ncol = 2)
+noise_0 <- matrix(c(0, 0, 0, max(y_0)), ncol = 2)
 
-# rotate y 45 degrees
-B <- matrix(c(sqrt(2)/2, -sqrt(2)/2, sqrt(2)/2, sqrt(2)/2), nrow = 2)
-my_dat <- matrix(c(x, y), ncol = 2) %*% B %>% data.frame()
-signal <- matrix(c(50, 100, 0, 0), ncol = 2) %*% B %>% data.frame() %>% 
-  mutate(ID = row_number()) %>%
-  pivot_wider(names_from = ID, values_from = X1:X2)
-noise <- matrix(c(50, 50, 0, 10), ncol = 2) %*% B %>% data.frame() %>% 
-  mutate(ID = row_number()) %>%
-  pivot_wider(names_from = ID, values_from = X1:X2)
+signal_A <- signal_0 %*% M_A
+signal_B <- signal_0 %*% M_B
+signal_C <- signal_0 %*% M_C
 
-ggplot() +
-  geom_point(dat = my_dat, aes(x = X1, y = X2)) +
-  geom_segment(data = signal, aes(x = X1_1, xend = X1_2, y = X2_1, yend = X2_2),
-               color = "goldenrod", linewidth = 1) +
-  geom_segment(data = noise, aes(x = X1_1, xend = X1_2, y = X2_1, yend = X2_2),
-               color = "goldenrod", linewidth = 1) +
-  labs(x = NULL, y = NULL)
+noise_A <- noise_0 %*% M_A
+noise_B <- noise_0 %*% M_B
+noise_C <- noise_0 %*% M_C
+
+signal <- tibble(
+  Camera = unique(spring_longer$Camera),
+  x_0 = c(signal_A[1, 1], signal_B[1, 1], signal_C[1, 1]),
+  x_1 = c(signal_A[2, 1], signal_B[2, 1], signal_C[2, 1]),
+  y_0 = c(signal_A[1, 2], signal_B[1, 2], signal_C[1, 2]),
+  y_1 = c(signal_A[2, 2], signal_B[2, 2], signal_C[2, 2])
+)
+  
+noise <- tibble(
+  Camera = unique(spring_longer$Camera),
+  x_0 = c(noise_A[1, 1], noise_B[1, 1], noise_C[1, 1]),
+  x_1 = c(noise_A[2, 1], noise_B[2, 1], noise_C[2, 1]),
+  y_0 = c(noise_A[1, 2], noise_B[1, 2], noise_C[1, 2]),
+  y_1 = c(noise_A[2, 2], noise_B[2, 2], noise_C[2, 2])
+)
+
+spring_longer |>
+  ggplot(aes(x = x, y = y)) +
+  geom_point(size = 1, color = my_palette$blue_red[1]) +
+  coord_cartesian(xlim = c(-1, 1), ylim = c(-1, 1)) +
+  geom_segment(data = signal, aes(x = x_0, xend = x_1, y = y_0, yend = y_1),
+               color = "goldenrod", linewidth = 1.5) +
+  geom_segment(data = noise, aes(x = x_0, xend = x_1, y = y_0, yend = y_1),
+               color = "goldenrod", linewidth = 1.5) +
+  facet_wrap(vars(Camera), nrow = 1) +
+  labs(title = "Simple Harmonic Motion from Three Perspectives",
+       subtitle = "With transformations minimizing SNR.")
 ```
 
-The other criteria is redundancy. There are three cameras recording the same activity, so they are perfectly correlated. If $\textbf{X}$ is an $m \times n$ matrix of centered values (subtracting the mean), PCA will find an orthonormal matrix $\textbf{P}$ in $\textbf{Y} = \textbf{PX}$ such that the covariance matrix $\textbf{C}_\textbf{Y} = \frac{1}{n}\textbf{YY}^T$ is a diagonal matrix. The rows of $\textbf{P}$ are the principal components of $\textbf{X}$.
+The other criteria is redundancy. The three cameras record the same activity, so they are highly correlated. 
 
-The process is to select a normalized direction in *m*-dimensional space which maximizes the $\textbf{X}$ variance. Save this vector as $\textbf{p}_1$. Next find a second direction along which variance is maximized, but restrict the search to directions that are orthogonal to the previous direction. Save this vector as $\textbf{p}_2$. Repeat until all *m* vectors are selected. The resulting ordered set of $\textbf{p}$'s are the principal components.
+```{r}
+#| warning: false
+spring |> select(ends_with("x")) |> GGally::ggpairs()
+```
+
+If $\textbf{X}$ is an $m \times n$ matrix of centered values (subtracting the mean), PCA finds an orthonormal matrix $\textbf{P}$ in $\textbf{Y} = \textbf{PX}$ such that the covariance matrix $\textbf{C}_\textbf{Y} = \frac{1}{n}\textbf{YY}^T$ is diagonal. The rows of $\textbf{P}$ are the principal components of $\textbf{X}$.
+The PCA algorithm is:
+
+- Select a normalized direction in *m*-dimensional space which maximizes the $\textbf{X}$ variance. Save this vector as $\textbf{p}_1$. 
+- Find a second direction along which variance is maximized, but restrict the search to directions that are orthogonal to the previous direction. Save this vector as $\textbf{p}_2$. 
+- Repeat until all *m* vectors are selected. The resulting ordered set of $\textbf{p}$'s are the principal components.
 
 With matrix algebra, you can express $\textbf{C}_\textbf{Y}$ in terms of the covariance matrix of $\textbf{X}$, $\textbf{C}_\textbf{X}$.
 
