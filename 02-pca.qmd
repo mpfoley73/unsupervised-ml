@@ -213,12 +213,7 @@ The other criteria is redundancy. The three cameras record the same activity, so
 spring |> select(ends_with("x")) |> GGally::ggpairs()
 ```
 
-If $\textbf{X}$ is an $m \times n$ matrix of centered values (subtracting the mean), PCA finds an orthonormal matrix $\textbf{P}$ in $\textbf{Y} = \textbf{PX}$ such that the covariance matrix $\textbf{C}_\textbf{Y} = \frac{1}{n}\textbf{YY}^T$ is diagonal. The rows of $\textbf{P}$ are the principal components of $\textbf{X}$.
-The PCA algorithm is:
-
-- Select a normalized direction in *m*-dimensional space which maximizes the $\textbf{X}$ variance. Save this vector as $\textbf{p}_1$. 
-- Find a second direction along which variance is maximized, but restrict the search to directions that are orthogonal to the previous direction. Save this vector as $\textbf{p}_2$. 
-- Repeat until all *m* vectors are selected. The resulting ordered set of $\textbf{p}$'s are the principal components.
+If $\textbf{X}$ is an $m \times n$ matrix of centered values (subtracting the mean), PCA finds an orthonormal matrix $\textbf{P}$ in $\textbf{Y} = \textbf{PX}$ such that the covariance matrix $\textbf{C}_\textbf{Y} = \frac{1}{n}\textbf{YY}^T$ is diagonal. The rows of $\textbf{P}$ are the principal components of $\textbf{X}$.  The off-diagonal elements of a covariance matrix are the covariances and they measure redundancy. The diagonal elements are the variances and they measure signal.
 
 With matrix algebra, you can express $\textbf{C}_\textbf{Y}$ in terms of the covariance matrix of $\textbf{X}$, $\textbf{C}_\textbf{X}$.
 
@@ -247,7 +242,7 @@ $$
 
 ## Case Study
 
-Let's work with a case study presented by [Laerd](https://statistics.laerd.com/premium/spss/pca/pca-in-spss.php). 
+Let's work with a case study presented by [Laerd](https://statistics.laerd.com/premium/spss/pca/pca-in-spss.php). 315 job candidates complete a questionnaire consisting of 25 questions.
 
 ```{r}
 #| include: false
@@ -276,7 +271,7 @@ n <- nrow(pca_dat)
 q_colnames <- pca_dat %>% select(Qu1:Qu25) %>% colnames()
 ```
 
-`r n` job candidates complete a questionnaire consisting of 25 questions using a 7-level Likert scale. Questions focused on motivation, dependability, enthusiasm, and commitment.
+The questions focused on four attributes: motivation, dependability, enthusiasm, and commitment.
 
 ```{r}
 #| include: false
@@ -289,6 +284,14 @@ gt_items <- function(items) {
     gtsummary::tbl_summary(by = "value", percent = "row", label = list(name ~ "")) |>
     gtsummary::as_gt()
 }
+
+q_motivation <- c("Qu3", "Qu4", "Qu5", "Qu6", "Qu7", "Qu8", "Qu12", "Qu13")
+
+q_dependability <- c("Qu2", "Qu14", "Qu15", "Qu16", "Qu17", "Qu18", "Qu19")
+
+q_enthusiasm <- c("Qu20", "Qu21", "Qu22", "Qu23", "Qu24", "Qu25")
+
+q_commitment <- c("Qu1", "Qu9", "Qu10", "Qu11")
 ```
 
 ::: panel-tabset
@@ -296,124 +299,88 @@ gt_items <- function(items) {
 ### Motivaton
 
 ```{r}
-gt_items(c("Qu3", "Qu4", "Qu5", "Qu6", "Qu7", "Qu8", "Qu12", "Qu13"))
+gt_items(q_motivation)
 ```
 
 ### Dependability
 
 ```{r}
-gt_items(c("Qu2", "Qu14", "Qu15", "Qu16", "Qu17", "Qu18", "Qu19"))
+gt_items(q_dependability)
 ```
 
 ### Enthusiasm
 
 ```{r}
-gt_items(c("Qu20", "Qu21", "Qu22", "Qu23", "Qu24", "Qu25"))
+gt_items(q_enthusiasm)
 ```
 
 ### Commitment
 
 ```{r}
-gt_items(c("Qu1", "Qu9", "Qu10", "Qu11"))
+gt_items(q_commitment)
 ```
 
 :::
+
+Let's drop the unrelated `FAC*` cols. PCA only works with numerical values. Our questionnaire uses a 7-level scale, so we're probably okay to treat that as numeric.
+
+```{r}
+pca_numeric <-
+  pca_dat |>
+  select(starts_with("Qu")) |> 
+  mutate(across(everything(), as.numeric))
+```
 
 ## Assumptions
 
 Missing values can bias PCA results. If you have missing values, you should either impute, remove the observations, or drop the columns. Fortunately there are no missing values in this dataset.
 
 ```{r}
-colSums(is.na(pca_dat))
+colSums(is.na(pca_numeric))
 ```
 
-Let's drop the unrelated `FAC*` cols. PCA only works with numerical values. Our questionnaire uses a 7-level scale, so we're probably okay to treat that as numeric. The data should also be normalized (subtract mean, divide by SD). Note that the `scale()` function returns the data as a matrix (fine).
+There are a few other assumptions to be aware of:
+
+- PCA is based on correlation coefficients, so all variables should be linearly related (*r* > .3) to at least one other variable.
+- The next assumption is that the sample sizes should be large. As a rule of thumb, there should be at least 5 cases per variable. 
+- There should be no outliers. Component scores greater than 3 standard deviations away from the mean can have a disproportionate influence on the results.
+
+I found two procedures used to test assumptions (though it does not test all of them). They both operate on the correlation matrix.
 
 ```{r}
-pca_numeric <-
-  pca_dat |>
-  select(starts_with("Qu")) |> 
-  mutate(across(everything(), as.numeric)) |>
-  scale()
-
-str(pca_numeric)
+corr_mtrx <- cor(pca_numeric)
 ```
 
-PCA is based on correlation coefficients, so all variables should be linearly related (*r* > .3) to at least one other variable. You might test this with a correlation matrix scatterplot, but the number of relationships can get unwieldy. 
-
-```{r}
-corr_mtrx <- cor(pca_numeric, method = "pearson")
-
-ggcorrplot::ggcorrplot(corr_mtrx)
-```
-
-Instead, just query the matrix for the max correlations. The worst is q20.
-
-```{r}
-# Load necessary library
-library(tidyverse)
-
-# Set seed for reproducibility
-set.seed(123)
-
-# Create a toy dataset
-n <- 100
-var1 <- rnorm(n, mean = 0, sd = 1)
-var2 <- var1 + rnorm(n, mean = 0, sd = 0.1)  # Strongly correlated with var1
-var3 <- rnorm(n, mean = 0, sd = 1)           # Weakly correlated with var1 and var2
-
-data <- data.frame(var1, var2, var3)
-
-# Standardize the dataset
-data_scaled <- scale(data)
-
-# Perform PCA
-pca <- prcomp(data_scaled, center = TRUE, scale. = TRUE)
-
-# Summary of PCA
-summary(pca)
-
-# Biplot of PCA
-biplot(pca)
-
-```
-
+The first assumption could be tested by querying the matrix for the max correlations. The worst is q20.
 
 ```{r}
 #| code-fold: true
 
-as_tibble(corr_mtrx) |>
+# ggcorrplot::ggcorrplot(corr_mtrx)
+
+max_cor <-
+  as_tibble(corr_mtrx) |>
   mutate(var1 = factor(q_colnames, levels = q_colnames)) |>
   pivot_longer(cols = c(Qu1:Qu25), names_to = "var2", values_to = "rho") |>
   filter(var1 != var2) |>
-  slice_max(by = var1, order_by = rho, n = 1) |>
-  gt::gt() |> 
-  gt::data_color(
-    columns = rho, 
-    method = "numeric",
-    palette = c("white", "dodgerblue3"),
-    domain = c(0.2, .9)
-  )
+  slice_max(by = var1, order_by = rho, n = 1)
+
+max_cor_v <- round(max_cor$rho, 2)
+names(max_cor_v) <- max_cor$var1
+max_cor_v
 ```
 
-- The sample sizes should be large. As a rule of thumb, there should be at least 5 cases per variable.
-- There should be no outliers. Component scores greater than 3 standard deviations away from the mean can have a disproportionate influence on the results.
-
-#### Sampling Adequacy {-}
-
-Each variable and the complete model should have an "adequate sample". The Kaiser-Meyer-Olkin (KMO) measure of sampling adequacy compares the variable's correlations with other variables to the partial correlations in the data. The test measures sampling adequacy for each variable in the model and for the complete model.^[See [Statistics How-to](https://www.statisticshowto.com/kaiser-meyer-olkin/).] 
+The Kaiser-Meyer-Olkin (KMO) measure of sampling adequacy compares the variable correlations to the partial correlations in the data. The test measures sampling adequacy for each variable in the model and for the complete model.^[See [Statistics How-to](https://www.statisticshowto.com/kaiser-meyer-olkin/).] 
 
 $$
 \text{KMO}_j = \frac{\sum_{i \ne j}r_{ij}^2}{\sum_{i \ne j}r_{ij}^2 + \sum_{i \ne j} u}
 $$
 
-where $r_{ij}$ are correlations, and $u_{ij}$ are partial covariances.
+where $r_{ij}$ are correlations, and $u_{ij}$ are partial covariances. Scores range from 0 to 1. Values should be at least .6 to justify a PCA. Values over .8 are preferable.
 
 ```{r}
 EFAtools::KMO(corr_mtrx)
 ```
-
-Scores range from 0 to 1. Values should be at least .6 to justify a PCA. Values over .8 are preferable.
 
 Bartlett's test of sphericity tests the null hypothesis that the correlation matrix is an identity matrix, i.e., there are no correlations between any variables.
 
@@ -423,16 +390,57 @@ EFAtools::BARTLETT(corr_mtrx, N = nrow(pca_dat))
 
 ## Perform PCA
 
-`princomp()` from the stats package performs a PCA analysis. 
+There are two stats package functions for PCA, `princomp()` and `prcomp()`. The documentation suggests `prcomp()` is preferable. 
 
 ```{r}
-princomp(pca_numeric,
-  cor = TRUE
-) %>% summary()
+pca_result <- prcomp(pca_numeric, center = TRUE, scale. = TRUE)
 
-pca_result <- prcomp(pca_numeric, center = TRUE, scale = TRUE) 
+summary(pca_result)
+```
 
-pca_result$rotation
+The top 4 components account for 60% of the variance. Subsequent components add less than 4% of explanatory power. The *component loadings* show how they relate to each column. Loadings are the eigenvectors of the covariance matrix. They are in the `rotatation` object returned by `prcomp()`. You should scale them by standard deviations. 
+
+```{r}
+pca_loadings <- pca_result$rotation %*% diag(pca_result$sdev)
+```
+
+Here are the loadings from the top 8 components.
+
+```{r}
+#| code-fold: true
+
+colnames(pca_loadings) <- paste0("pc", 1:25)
+
+pca_loadings |>
+  as_tibble(rownames = "Q") |>
+  mutate(Area = case_when(
+    Q %in% q_motivation ~ "Motivation",
+    Q %in% q_dependability ~ "Dependability",
+    Q %in% q_enthusiasm ~ "Enthusiasm",
+    Q %in% q_commitment ~ "Commitment"
+  )) |>
+  select(Area, Q, pc1:pc8) |>
+  arrange(Area, Q) |>
+  gt::gt() |> 
+  gt::fmt_number(pc1:pc8, decimals = 3) |>
+  gt::data_color(
+    columns = pc1:pc8, 
+    method = "numeric",
+    palette = c("firebrick", "white", "dodgerblue3"),
+    domain = c(-1, 1)
+  ) |>
+  gt::tab_row_group(label = "Commitment", rows = Area == "Commitment") |>
+  gt::tab_row_group(label = "Enthusiasm", rows = Area == "Enthusiasm") |>
+  gt::tab_row_group(label = "Dependability", rows = Area == "Dependability") |>
+  gt::tab_row_group(label = "Motivation", rows = Area == "Motivation") |>
+  gt::cols_hide(columns = Area) |>
+  gt::tab_header("Factor loadings by survey area.") |>
+  gt::tab_options(heading.align = "left")
+```
+
+
+```{r}
+
 
 biplot(pca_result, scale = 0)
 
